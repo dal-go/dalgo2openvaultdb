@@ -600,7 +600,7 @@ func TestQuery_WireAndReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteQueryToRecordsReader: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Verify wire encoding.
 	var wq map[string]any
@@ -656,7 +656,7 @@ func TestQuery_KeysOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteQueryToRecordsReader: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var wq map[string]any
 	_ = json.Unmarshal(capturedBody, &wq)
@@ -703,7 +703,7 @@ func TestQuery_ArrayContains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteQueryToRecordsReader: %v", err)
 	}
-	reader.Close()
+	_ = reader.Close()
 
 	var wq struct {
 		Where []struct {
