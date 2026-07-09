@@ -25,6 +25,15 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+// WithBearerToken sends the token as an Authorization: Bearer header on
+// every request — required when the server runs `ovdb serve --auth` (either
+// the owner token or an app token from the connect flow).
+func WithBearerToken(token string) Option {
+	return func(db *database) {
+		db.c.bearerToken = token
+	}
+}
+
 // database is the dal.DB implementation for OpenVaultDB.
 type database struct {
 	dal.ConcurrencyAvailable // SupportsConcurrentConnections → true

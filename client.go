@@ -13,9 +13,19 @@ import (
 
 // httpClient is the internal HTTP helper for talking to OpenVaultDB.
 type httpClient struct {
-	baseURL    string
-	databaseID string
-	client     *http.Client
+	baseURL     string
+	databaseID  string
+	client      *http.Client
+	bearerToken string
+}
+
+// do sends the request, attaching the bearer token when configured
+// (servers running `ovdb serve --auth`).
+func (c *httpClient) do(req *http.Request) (*http.Response, error) {
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+	return c.client.Do(req)
 }
 
 func (c *httpClient) recordURL(keyPath string) string {
@@ -39,7 +49,7 @@ func (c *httpClient) getRecord(ctx context.Context, key *dal.Key) ([]byte, error
 		return nil, fmt.Errorf("build GET request: %w", err)
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", key, err)
 	}
@@ -62,7 +72,7 @@ func (c *httpClient) headRecord(ctx context.Context, key *dal.Key) (bool, error)
 		return false, fmt.Errorf("build HEAD request: %w", err)
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return false, fmt.Errorf("HEAD %s: %w", key, err)
 	}
@@ -86,7 +96,7 @@ func (c *httpClient) postBatch(ctx context.Context, payload []byte) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("POST batch: %w", err)
 	}
@@ -105,7 +115,7 @@ func (c *httpClient) postQuery(ctx context.Context, payload []byte) ([]byte, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST query: %w", err)
 	}
