@@ -7,6 +7,7 @@ import (
 
 	"github.com/dal-go/dalgo/dal"
 	"github.com/dal-go/dalgo/recordset"
+	dalrecord "github.com/dal-go/record"
 )
 
 // wireWhereClause is a single WHERE condition sent to OpenVaultDB.
@@ -214,12 +215,12 @@ type wireQueryRecord struct {
 type queryRecordsReader struct {
 	records  []wireQueryRecord
 	pos      int
-	intoRec  func() dal.Record
+	intoRec  func() dalrecord.Record
 	idKind   reflect.Kind
 	keysOnly bool
 }
 
-func (r *queryRecordsReader) Next() (dal.Record, error) {
+func (r *queryRecordsReader) Next() (dalrecord.Record, error) {
 	if r.pos >= len(r.records) {
 		return nil, dal.ErrNoMoreRecords
 	}
@@ -232,11 +233,11 @@ func (r *queryRecordsReader) Next() (dal.Record, error) {
 		return nil, fmt.Errorf("parse query record key %q: %w", wr.Key, err)
 	}
 
-	key := dal.NewKeyWithID(collection, id)
+	key := dalrecord.NewKeyWithID(collection, id)
 
-	var rec dal.Record
+	var rec dalrecord.Record
 	if r.keysOnly || r.intoRec == nil {
-		rec = dal.NewRecord(key)
+		rec = dalrecord.NewRecord(key)
 		rec.SetError(nil)
 	} else {
 		tmpl := r.intoRec()
@@ -244,7 +245,7 @@ func (r *queryRecordsReader) Next() (dal.Record, error) {
 		tmpl.SetError(nil)
 		data := tmpl.Data()
 		// Build a new record with the correct key from the wire response.
-		rec = dal.NewRecordWithData(key, data)
+		rec = dalrecord.NewRecordWithData(key, data)
 		rec.SetError(nil)
 		if len(wr.Data) > 0 && string(wr.Data) != "null" {
 			if err := json.Unmarshal(wr.Data, rec.Data()); err != nil {
@@ -260,7 +261,7 @@ func (r *queryRecordsReader) Close() error            { return nil }
 
 // splitKeyPath splits a wire key path like "contacts/c1" or
 // "spaces/s1/members/m1" into the innermost (collection, id) pair.
-// Only the last two segments are needed for dal.NewKeyWithID.
+// Only the last two segments are needed for dalrecord.NewKeyWithID.
 func splitKeyPath(keyPath string) (collection, id string, err error) {
 	// Walk segments.
 	segs := splitPath(keyPath)
@@ -334,7 +335,7 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 		return nil, fmt.Errorf("parse query response: %w", err)
 	}
 
-	intoRec := func() dal.Record { return q.IntoRecord() }
+	intoRec := func() dalrecord.Record { return q.IntoRecord() }
 	if q.IntoRecord() == nil {
 		intoRec = nil
 	}

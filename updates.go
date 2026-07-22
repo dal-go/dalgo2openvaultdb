@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/dal-go/dalgo/dal"
-	"github.com/dal-go/dalgo/update"
+	"github.com/dal-go/record/update"
 )
 
 // wireUpdate is the JSON representation of a single field update sent to

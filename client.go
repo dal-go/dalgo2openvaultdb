@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/dal-go/dalgo/dal"
+	dalrecord "github.com/dal-go/record"
 )
 
 // httpClient is the internal HTTP helper for talking to OpenVaultDB.
@@ -43,7 +43,7 @@ func (c *httpClient) queryURL() string {
 // getRecord fetches a single record. Returns (body, nil) on 200, (nil, nil) on
 // 404 (caller should call record.SetError with ErrNotFoundByKey), or (nil, err)
 // on other failures.
-func (c *httpClient) getRecord(ctx context.Context, key *dal.Key) ([]byte, error) {
+func (c *httpClient) getRecord(ctx context.Context, key *dalrecord.Key) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.recordURL(key.String()), nil)
 	if err != nil {
 		return nil, fmt.Errorf("build GET request: %w", err)
@@ -66,7 +66,7 @@ func (c *httpClient) getRecord(ctx context.Context, key *dal.Key) ([]byte, error
 
 // headRecord checks existence via HEAD. Returns (true, nil), (false, nil) on
 // 200/404, or (false, err) on other failures.
-func (c *httpClient) headRecord(ctx context.Context, key *dal.Key) (bool, error) {
+func (c *httpClient) headRecord(ctx context.Context, key *dalrecord.Key) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.recordURL(key.String()), nil)
 	if err != nil {
 		return false, fmt.Errorf("build HEAD request: %w", err)
@@ -133,7 +133,7 @@ func (c *httpClient) postQuery(ctx context.Context, payload []byte) ([]byte, err
 // unmarshalRecord parses a GET response body and populates the record.
 // The response has the shape {"key":"...","data":{...}}.
 // SetError(nil) must already have been called on the record before Data() is called.
-func unmarshalRecord(body []byte, record dal.Record) error {
+func unmarshalRecord(body []byte, record dalrecord.Record) error {
 	var wrapper struct {
 		Data json.RawMessage `json:"data"`
 	}

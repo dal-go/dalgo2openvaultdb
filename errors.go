@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/dal-go/dalgo/dal"
+	dalrecord "github.com/dal-go/record"
 )
 
 // apiError is the shape returned by OpenVaultDB on non-2xx responses.
@@ -21,7 +22,7 @@ type apiError struct {
 // For 404 responses the key is used to produce an ErrNotFoundByKey.
 // For 409 responses an "already exists" error is returned.
 // The response body is always consumed and closed.
-func mapHTTPError(resp *http.Response, key *dal.Key) error {
+func mapHTTPError(resp *http.Response, key *dalrecord.Key) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
