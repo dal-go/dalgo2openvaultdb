@@ -9,7 +9,8 @@ import (
 
 	"github.com/dal-go/dalgo/dal"
 	"github.com/dal-go/dalgo/recordset"
-	"github.com/dal-go/dalgo/update"
+	dalrecord "github.com/dal-go/record"
+	"github.com/dal-go/record/update"
 )
 
 // txOp is an operation buffered in a readwrite transaction.
@@ -56,7 +57,7 @@ func (tx *readwriteTx) Options() dal.TransactionOptions { return tx.opts }
 
 // -- ReadSession methods on readwriteTx --
 
-func (tx *readwriteTx) Get(ctx context.Context, record dal.Record) error {
+func (tx *readwriteTx) Get(ctx context.Context, record dalrecord.Record) error {
 	keyStr := record.Key().String()
 	if buf, ok := tx.bufferedData[keyStr]; ok {
 		switch buf.opType {
@@ -86,7 +87,7 @@ func (tx *readwriteTx) Get(ctx context.Context, record dal.Record) error {
 	return nil
 }
 
-func (tx *readwriteTx) Exists(ctx context.Context, key *dal.Key) (bool, error) {
+func (tx *readwriteTx) Exists(ctx context.Context, key *dalrecord.Key) (bool, error) {
 	keyStr := key.String()
 	if buf, ok := tx.bufferedData[keyStr]; ok {
 		return buf.opType != "delete", nil
@@ -94,9 +95,9 @@ func (tx *readwriteTx) Exists(ctx context.Context, key *dal.Key) (bool, error) {
 	return tx.c.headRecord(ctx, key)
 }
 
-func (tx *readwriteTx) GetMulti(ctx context.Context, records []dal.Record) error {
+func (tx *readwriteTx) GetMulti(ctx context.Context, records []dalrecord.Record) error {
 	for _, r := range records {
-		if err := tx.Get(ctx, r); err != nil && !dal.IsNotFound(err) {
+		if err := tx.Get(ctx, r); err != nil && !dalrecord.IsNotFound(err) {
 			return err
 		}
 	}
@@ -129,7 +130,7 @@ func (tx *readwriteTx) ExecuteQueryToRecordsetReader(_ context.Context, _ dal.Qu
 
 // -- WriteSession methods on readwriteTx --
 
-func (tx *readwriteTx) Set(ctx context.Context, record dal.Record) error {
+func (tx *readwriteTx) Set(ctx context.Context, record dalrecord.Record) error {
 	record.SetError(nil)
 	data, err := json.Marshal(record.Data())
 	if err != nil {
@@ -143,7 +144,7 @@ func (tx *readwriteTx) Set(ctx context.Context, record dal.Record) error {
 	return nil
 }
 
-func (tx *readwriteTx) SetMulti(ctx context.Context, records []dal.Record) error {
+func (tx *readwriteTx) SetMulti(ctx context.Context, records []dalrecord.Record) error {
 	for _, r := range records {
 		if err := tx.Set(ctx, r); err != nil {
 			return err
@@ -152,7 +153,7 @@ func (tx *readwriteTx) SetMulti(ctx context.Context, records []dal.Record) error
 	return nil
 }
 
-func (tx *readwriteTx) Insert(ctx context.Context, record dal.Record, opts ...dal.InsertOption) error {
+func (tx *readwriteTx) Insert(ctx context.Context, record dalrecord.Record, opts ...dal.InsertOption) error {
 	options := dal.NewInsertOptions(opts...)
 	gen := options.IDGenerator()
 	if gen == nil && options.PreferAdapterGeneratedID() {
@@ -160,7 +161,7 @@ func (tx *readwriteTx) Insert(ctx context.Context, record dal.Record, opts ...da
 	}
 	if gen != nil {
 		return dal.InsertWithIdGenerator(ctx, record, gen, 5,
-			func(key *dal.Key) error {
+			func(key *dalrecord.Key) error {
 				// Check buffer first, then HTTP.
 				if buf, ok := tx.bufferedData[key.String()]; ok && buf.opType != "delete" {
 					return nil // exists in buffer
@@ -172,9 +173,9 @@ func (tx *readwriteTx) Insert(ctx context.Context, record dal.Record, opts ...da
 				if exists {
 					return nil // exists on server
 				}
-				return dal.ErrRecordNotFound // free to use
+				return dalrecord.ErrRecordNotFound // free to use
 			},
-			func(r dal.Record) error {
+			func(r dalrecord.Record) error {
 				return tx.bufferInsert(r)
 			},
 		)
@@ -182,7 +183,7 @@ func (tx *readwriteTx) Insert(ctx context.Context, record dal.Record, opts ...da
 	return tx.bufferInsert(record)
 }
 
-func (tx *readwriteTx) bufferInsert(record dal.Record) error {
+func (tx *readwriteTx) bufferInsert(record dalrecord.Record) error {
 	record.SetError(nil)
 	data, err := json.Marshal(record.Data())
 	if err != nil {
@@ -196,7 +197,7 @@ func (tx *readwriteTx) bufferInsert(record dal.Record) error {
 	return nil
 }
 
-func (tx *readwriteTx) InsertMulti(ctx context.Context, records []dal.Record, opts ...dal.InsertOption) error {
+func (tx *readwriteTx) InsertMulti(ctx context.Context, records []dalrecord.Record, opts ...dal.InsertOption) error {
 	for _, r := range records {
 		if err := tx.Insert(ctx, r, opts...); err != nil {
 			return err
@@ -205,14 +206,14 @@ func (tx *readwriteTx) InsertMulti(ctx context.Context, records []dal.Record, op
 	return nil
 }
 
-func (tx *readwriteTx) Delete(_ context.Context, key *dal.Key) error {
+func (tx *readwriteTx) Delete(_ context.Context, key *dalrecord.Key) error {
 	keyStr := key.String()
 	tx.bufferedData[keyStr] = bufferedRecord{opType: "delete"}
 	tx.ops = append(tx.ops, txOp{Op: "delete", Key: keyStr})
 	return nil
 }
 
-func (tx *readwriteTx) DeleteMulti(ctx context.Context, keys []*dal.Key) error {
+func (tx *readwriteTx) DeleteMulti(ctx context.Context, keys []*dalrecord.Key) error {
 	for _, k := range keys {
 		if err := tx.Delete(ctx, k); err != nil {
 			return err
@@ -221,7 +222,7 @@ func (tx *readwriteTx) DeleteMulti(ctx context.Context, keys []*dal.Key) error {
 	return nil
 }
 
-func (tx *readwriteTx) Update(_ context.Context, key *dal.Key, updates []update.Update, preconditions ...dal.Precondition) error {
+func (tx *readwriteTx) Update(_ context.Context, key *dalrecord.Key, updates []update.Update, preconditions ...dal.Precondition) error {
 	wire, err := marshalUpdates(updates, preconditions)
 	if err != nil {
 		return err
@@ -231,11 +232,11 @@ func (tx *readwriteTx) Update(_ context.Context, key *dal.Key, updates []update.
 	return nil
 }
 
-func (tx *readwriteTx) UpdateRecord(ctx context.Context, record dal.Record, updates []update.Update, preconditions ...dal.Precondition) error {
+func (tx *readwriteTx) UpdateRecord(ctx context.Context, record dalrecord.Record, updates []update.Update, preconditions ...dal.Precondition) error {
 	return tx.Update(ctx, record.Key(), updates, preconditions...)
 }
 
-func (tx *readwriteTx) UpdateMulti(ctx context.Context, keys []*dal.Key, updates []update.Update, preconditions ...dal.Precondition) error {
+func (tx *readwriteTx) UpdateMulti(ctx context.Context, keys []*dalrecord.Key, updates []update.Update, preconditions ...dal.Precondition) error {
 	for _, k := range keys {
 		if err := tx.Update(ctx, k, updates, preconditions...); err != nil {
 			return err
@@ -276,7 +277,7 @@ var _ dal.ReadTransaction = (*readonlyTx)(nil)
 
 func (tx *readonlyTx) Options() dal.TransactionOptions { return tx.opts }
 
-func (tx *readonlyTx) Get(ctx context.Context, record dal.Record) error {
+func (tx *readonlyTx) Get(ctx context.Context, record dalrecord.Record) error {
 	body, err := tx.c.getRecord(ctx, record.Key())
 	if err != nil {
 		record.SetError(err)
@@ -290,13 +291,13 @@ func (tx *readonlyTx) Get(ctx context.Context, record dal.Record) error {
 	return nil
 }
 
-func (tx *readonlyTx) Exists(ctx context.Context, key *dal.Key) (bool, error) {
+func (tx *readonlyTx) Exists(ctx context.Context, key *dalrecord.Key) (bool, error) {
 	return tx.c.headRecord(ctx, key)
 }
 
-func (tx *readonlyTx) GetMulti(ctx context.Context, records []dal.Record) error {
+func (tx *readonlyTx) GetMulti(ctx context.Context, records []dalrecord.Record) error {
 	for _, r := range records {
-		if err := tx.Get(ctx, r); err != nil && !dal.IsNotFound(err) {
+		if err := tx.Get(ctx, r); err != nil && !dalrecord.IsNotFound(err) {
 			return err
 		}
 	}

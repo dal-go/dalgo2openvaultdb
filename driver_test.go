@@ -13,7 +13,8 @@ import (
 	"testing"
 
 	"github.com/dal-go/dalgo/dal"
-	"github.com/dal-go/dalgo/update"
+	dalrecord "github.com/dal-go/record"
+	"github.com/dal-go/record/update"
 
 	dalgo2openvaultdb "github.com/dal-go/dalgo2openvaultdb"
 )
@@ -251,9 +252,9 @@ func TestGet_Found(t *testing.T) {
 	store.set("contacts/c1", json.RawMessage(`{"name":"Alice","status":"active"}`))
 	db := mustNewDB(t, srv)
 
-	key := dal.NewKeyWithID("contacts", "c1")
+	key := dalrecord.NewKeyWithID("contacts", "c1")
 	data := &contactData{}
-	rec := dal.NewRecordWithData(key, data)
+	rec := dalrecord.NewRecordWithData(key, data)
 
 	if err := db.Get(context.Background(), rec); err != nil {
 		t.Fatalf("Get: %v", err)
@@ -273,12 +274,12 @@ func TestGet_NotFound(t *testing.T) {
 	defer srv.Close()
 	db := mustNewDB(t, srv)
 
-	key := dal.NewKeyWithID("contacts", "missing")
+	key := dalrecord.NewKeyWithID("contacts", "missing")
 	data := &contactData{}
-	rec := dal.NewRecordWithData(key, data)
+	rec := dalrecord.NewRecordWithData(key, data)
 
 	err := db.Get(context.Background(), rec)
-	if !dal.IsNotFound(err) {
+	if !dalrecord.IsNotFound(err) {
 		t.Fatalf("Get should return a not-found error (as dalgo2memory does), got: %v", err)
 	}
 	if rec.Exists() {
@@ -298,12 +299,12 @@ func TestExists(t *testing.T) {
 	db := mustNewDB(t, srv)
 	ctx := context.Background()
 
-	exists, err := db.Exists(ctx, dal.NewKeyWithID("contacts", "c1"))
+	exists, err := db.Exists(ctx, dalrecord.NewKeyWithID("contacts", "c1"))
 	if err != nil || !exists {
 		t.Errorf("Exists('contacts/c1'): (%v, %v), want (true, nil)", exists, err)
 	}
 
-	exists, err = db.Exists(ctx, dal.NewKeyWithID("contacts", "ghost"))
+	exists, err = db.Exists(ctx, dalrecord.NewKeyWithID("contacts", "ghost"))
 	if err != nil || exists {
 		t.Errorf("Exists('contacts/ghost'): (%v, %v), want (false, nil)", exists, err)
 	}
@@ -319,9 +320,9 @@ func TestInsert_Conflict(t *testing.T) {
 	db := mustNewDB(t, srv)
 
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key := dal.NewKeyWithID("contacts", "c1")
+		key := dalrecord.NewKeyWithID("contacts", "c1")
 		data := &contactData{Name: "Duplicate"}
-		rec := dal.NewRecordWithData(key, data)
+		rec := dalrecord.NewRecordWithData(key, data)
 		return tx.Insert(ctx, rec)
 	})
 	if err == nil {
@@ -375,16 +376,16 @@ func TestReadwriteTx_Buffering(t *testing.T) {
 	var readYourWriteName string
 
 	err := db.RunReadwriteTransaction(ctx, func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key1 := dal.NewKeyWithID("contacts", "c1")
+		key1 := dalrecord.NewKeyWithID("contacts", "c1")
 		data1 := &contactData{Name: "Alice"}
-		rec1 := dal.NewRecordWithData(key1, data1)
+		rec1 := dalrecord.NewRecordWithData(key1, data1)
 		if err := tx.Set(ctx, rec1); err != nil {
 			return err
 		}
 
 		// Read-your-writes: Get should return the buffered record.
 		readBack := &contactData{}
-		recRead := dal.NewRecordWithData(key1, readBack)
+		recRead := dalrecord.NewRecordWithData(key1, readBack)
 		if err := tx.Get(ctx, recRead); err != nil {
 			return fmt.Errorf("get after set: %w", err)
 		}
@@ -393,9 +394,9 @@ func TestReadwriteTx_Buffering(t *testing.T) {
 		}
 		readYourWriteName = readBack.Name
 
-		key2 := dal.NewKeyWithID("contacts", "c2")
+		key2 := dalrecord.NewKeyWithID("contacts", "c2")
 		data2 := &contactData{Name: "Bob"}
-		rec2 := dal.NewRecordWithData(key2, data2)
+		rec2 := dalrecord.NewRecordWithData(key2, data2)
 		return tx.Insert(ctx, rec2)
 	}, dal.TxWithMessage("test commit"))
 
@@ -439,9 +440,9 @@ func TestReadwriteTx_FailedWorkerSendsNothing(t *testing.T) {
 
 	workerErr := fmt.Errorf("worker failed")
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key := dal.NewKeyWithID("contacts", "c1")
+		key := dalrecord.NewKeyWithID("contacts", "c1")
 		data := &contactData{Name: "Alice"}
-		rec := dal.NewRecordWithData(key, data)
+		rec := dalrecord.NewRecordWithData(key, data)
 		_ = tx.Set(ctx, rec)
 		return workerErr
 	})
@@ -463,13 +464,13 @@ func TestReadwriteTx_DeleteInBuffer(t *testing.T) {
 	db := mustNewDB(t, srv)
 
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key := dal.NewKeyWithID("contacts", "c1")
+		key := dalrecord.NewKeyWithID("contacts", "c1")
 		_ = tx.Delete(ctx, key)
 
 		// Get should see not-found from buffer, not from HTTP.
 		data := &contactData{}
-		rec := dal.NewRecordWithData(key, data)
-		if err := tx.Get(ctx, rec); !dal.IsNotFound(err) {
+		rec := dalrecord.NewRecordWithData(key, data)
+		if err := tx.Get(ctx, rec); !dalrecord.IsNotFound(err) {
 			return fmt.Errorf("expected not-found error after buffered delete, got: %w", err)
 		}
 		if rec.Exists() {
@@ -514,7 +515,7 @@ func TestUpdateWireEncoding(t *testing.T) {
 		dalgo2openvaultdb.WithHTTPClient(srv.Client()))
 
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key := dal.NewKeyWithID("spaces", "s1")
+		key := dalrecord.NewKeyWithID("spaces", "s1")
 		return tx.Update(ctx, key, []update.Update{
 			update.ByFieldName("title", "New Title"),
 			update.DeleteByFieldName("obsolete"),
@@ -592,8 +593,8 @@ func TestQuery_WireAndReader(t *testing.T) {
 		WhereField("status", dal.Equal, "active").
 		OrderBy(dal.AscendingField("name")).
 		Limit(10).
-		SelectIntoRecord(func() dal.Record {
-			return dal.NewRecordWithData(dal.NewKeyWithID("contacts", ""), &contactData{})
+		SelectIntoRecord(func() dalrecord.Record {
+			return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("contacts", ""), &contactData{})
 		})
 
 	reader, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
@@ -695,8 +696,8 @@ func TestQuery_ArrayContains(t *testing.T) {
 	// WhereInArrayField: value In fieldName → array-contains.
 	q := collectionFrom("contacts").
 		WhereInArrayField("accounts", "acc1").
-		SelectIntoRecord(func() dal.Record {
-			return dal.NewRecordWithData(dal.NewKeyWithID("contacts", ""), &contactData{})
+		SelectIntoRecord(func() dalrecord.Record {
+			return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("contacts", ""), &contactData{})
 		})
 
 	reader, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
@@ -736,9 +737,9 @@ func TestIncompleteKey_Insert(t *testing.T) {
 
 	db := mustNewDB(t, srv)
 
-	key := dal.NewIncompleteKey("contacts", reflect.String, nil)
+	key := dalrecord.NewIncompleteKey("contacts", reflect.String, nil)
 	data := &contactData{Name: "New"}
-	rec := dal.NewRecordWithData(key, data)
+	rec := dalrecord.NewRecordWithData(key, data)
 
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
 		return tx.Insert(ctx, rec, dal.WithRandomStringKey(16, 5))
@@ -766,7 +767,7 @@ func TestPreconditionsNotSupported(t *testing.T) {
 	db := mustNewDB(t, srv)
 
 	err := db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
-		key := dal.NewKeyWithID("contacts", "c1")
+		key := dalrecord.NewKeyWithID("contacts", "c1")
 		return tx.Update(ctx, key, []update.Update{
 			update.ByFieldName("name", "x"),
 		}, dal.WithExistsPrecondition())
@@ -787,8 +788,8 @@ func TestRecordsetReaderUnsupported(t *testing.T) {
 	defer srv.Close()
 
 	db := mustNewDB(t, srv)
-	q := collectionFrom("contacts").SelectIntoRecord(func() dal.Record {
-		return dal.NewRecordWithData(dal.NewKeyWithID("contacts", ""), &contactData{})
+	q := collectionFrom("contacts").SelectIntoRecord(func() dalrecord.Record {
+		return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("contacts", ""), &contactData{})
 	})
 	_, err := db.ExecuteQueryToRecordsetReader(context.Background(), q)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
@@ -806,13 +807,13 @@ func TestGetMulti(t *testing.T) {
 	store.set("contacts/c1", json.RawMessage(`{"name":"Alice"}`))
 
 	db := mustNewDB(t, srv)
-	k1 := dal.NewKeyWithID("contacts", "c1")
-	k2 := dal.NewKeyWithID("contacts", "c2")
+	k1 := dalrecord.NewKeyWithID("contacts", "c1")
+	k2 := dalrecord.NewKeyWithID("contacts", "c2")
 	d1, d2 := &contactData{}, &contactData{}
-	r1 := dal.NewRecordWithData(k1, d1)
-	r2 := dal.NewRecordWithData(k2, d2)
+	r1 := dalrecord.NewRecordWithData(k1, d1)
+	r2 := dalrecord.NewRecordWithData(k2, d2)
 
-	if err := db.GetMulti(context.Background(), []dal.Record{r1, r2}); err != nil {
+	if err := db.GetMulti(context.Background(), []dalrecord.Record{r1, r2}); err != nil {
 		t.Fatalf("GetMulti: %v", err)
 	}
 	if !r1.Exists() {
@@ -866,9 +867,9 @@ func TestReadonlyTx(t *testing.T) {
 
 	var gotName string
 	err := db.RunReadonlyTransaction(context.Background(), func(ctx context.Context, tx dal.ReadTransaction) error {
-		key := dal.NewKeyWithID("contacts", "c1")
+		key := dalrecord.NewKeyWithID("contacts", "c1")
 		data := &contactData{}
-		rec := dal.NewRecordWithData(key, data)
+		rec := dalrecord.NewRecordWithData(key, data)
 		if err := tx.Get(ctx, rec); err != nil {
 			return err
 		}

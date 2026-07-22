@@ -12,6 +12,7 @@ import (
 
 	"github.com/dal-go/dalgo/dal"
 	"github.com/dal-go/dalgo/recordset"
+	dalrecord "github.com/dal-go/record"
 )
 
 // Option configures a DB created by NewDB.
@@ -83,8 +84,8 @@ func (db *database) Schema() dal.Schema { return nil }
 
 // Get fetches a single record. On 404, the record's error is set to an
 // ErrNotFoundByKey and Get returns that error (matching dalgo2memory:
-// callers use dal.IsNotFound(err) and/or record.Exists()).
-func (db *database) Get(ctx context.Context, record dal.Record) error {
+// callers use dalrecord.IsNotFound(err) and/or record.Exists()).
+func (db *database) Get(ctx context.Context, record dalrecord.Record) error {
 	body, err := db.c.getRecord(ctx, record.Key())
 	if err != nil {
 		record.SetError(err)
@@ -99,15 +100,15 @@ func (db *database) Get(ctx context.Context, record dal.Record) error {
 }
 
 // Exists reports whether a record with the given key exists.
-func (db *database) Exists(ctx context.Context, key *dal.Key) (bool, error) {
+func (db *database) Exists(ctx context.Context, key *dalrecord.Key) (bool, error) {
 	return db.c.headRecord(ctx, key)
 }
 
 // GetMulti fetches multiple records. Per-record not-found does not abort; the
 // error is stored on each individual record.
-func (db *database) GetMulti(ctx context.Context, records []dal.Record) error {
+func (db *database) GetMulti(ctx context.Context, records []dalrecord.Record) error {
 	for _, r := range records {
-		if err := db.Get(ctx, r); err != nil && !dal.IsNotFound(err) {
+		if err := db.Get(ctx, r); err != nil && !dalrecord.IsNotFound(err) {
 			return err
 		}
 	}
