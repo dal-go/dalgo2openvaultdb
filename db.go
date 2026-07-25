@@ -35,7 +35,8 @@ func WithBearerToken(token string) Option {
 	}
 }
 
-// database is the dal.DB implementation for OpenVaultDB.
+// database is the dal.Backend implementation for OpenVaultDB, wrapped by
+// dal.NewDB (see NewDB below) into the sealed, caller-facing dal.DB.
 type database struct {
 	dal.ConcurrencyAvailable // SupportsConcurrentConnections → true
 
@@ -43,9 +44,10 @@ type database struct {
 	c  httpClient
 }
 
-var _ dal.DB = (*database)(nil)
-
-// NewDB creates a new DALgo DB backed by OpenVaultDB.
+// NewDB creates a new DALgo DB backed by OpenVaultDB. The returned dal.DB is
+// sealed by dal.NewDB: every read-write transaction it starts hands the
+// worker a transaction whose writes run the framework's BeforeSave
+// validation and hooks before reaching this adapter's code.
 //
 //	db, err := dalgo2openvaultdb.NewDB("http://127.0.0.1:6832", "sneat-dev")
 func NewDB(baseURL, databaseID string, opts ...Option) (dal.DB, error) {
@@ -66,7 +68,7 @@ func NewDB(baseURL, databaseID string, opts ...Option) (dal.DB, error) {
 	for _, o := range opts {
 		o(db)
 	}
-	return db, nil
+	return dal.NewDB(db), nil
 }
 
 // ID returns the database identifier supplied to NewDB.
@@ -173,6 +175,6 @@ func (db *database) RunReadwriteTransaction(ctx context.Context, f dal.RWTxWorke
 
 // Compile-time interface checks.
 var (
-	_ dal.DB          = (*database)(nil)
+	_ dal.Backend     = (*database)(nil)
 	_ dal.ReadSession = (*database)(nil)
 )
