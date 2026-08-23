@@ -310,6 +310,11 @@ func TestExists(t *testing.T) {
 	}
 }
 
+// TestInsert_Conflict proves a duplicate-key Insert surfaces as an HTTP 409
+// from the batch commit and is classified as dalrecord.IsAlreadyExists, while
+// still rendering the pre-existing "already exists" text so any caller
+// matching on that literal string keeps working unchanged (errors.go wraps
+// dalrecord.ErrRecordExists with %w rather than replacing the message).
 func TestInsert_Conflict(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
@@ -330,6 +335,45 @@ func TestInsert_Conflict(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)
+	}
+	if !dalrecord.IsAlreadyExists(err) {
+		t.Errorf("a duplicate Insert should satisfy dalrecord.IsAlreadyExists, got: %v", err)
+	}
+}
+
+// TestInsert_OtherFailureNotClassifiedAsExists proves mapHTTPError's 409
+// branch is the only path that satisfies dalrecord.IsAlreadyExists — a
+// different failure during the same batch commit (a 500 from the server,
+// unrelated to a duplicate key) must NOT be misclassified as "already
+// exists".
+func TestInsert_OtherFailureNotClassifiedAsExists(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "batch") {
+			apiErr(w, http.StatusInternalServerError, "internal", "boom")
+			return
+		}
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	db, err := dalgo2openvaultdb.NewDB(srv.URL, "testdb", dalgo2openvaultdb.WithHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+
+	err = db.RunReadwriteTransaction(context.Background(), func(ctx context.Context, tx dal.ReadwriteTransaction) error {
+		key := dalrecord.NewKeyWithID("contacts", "c1")
+		data := &contactData{Name: "Alice"}
+		rec := dalrecord.NewRecordWithData(key, data)
+		return tx.Insert(ctx, rec)
+	})
+	if err == nil {
+		t.Fatal("expected an error from the 500 batch response, got nil")
+	}
+	if dalrecord.IsAlreadyExists(err) {
+		t.Errorf("a non-409 failure must not satisfy dalrecord.IsAlreadyExists, got: %v", err)
 	}
 }
 
