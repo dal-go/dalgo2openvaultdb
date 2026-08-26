@@ -1,6 +1,8 @@
 module github.com/dal-go/dalgo2openvaultdb
 
-go 1.27.0
+go 1.26.0
+
+toolchain go1.27.0
 
 require (
 	github.com/dal-go/dalgo v0.66.1
