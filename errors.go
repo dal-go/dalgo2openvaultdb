@@ -36,6 +36,11 @@ func mapHTTPError(resp *http.Response, key *dalrecord.Key) error {
 	}
 
 	switch resp.StatusCode {
+	case http.StatusUnprocessableEntity, http.StatusNotImplemented:
+		if ae.Error.Code == "authorization_unsupported" || ae.Error.Code == "not_supported" {
+			return fmt.Errorf("%w: %s", dal.ErrNotSupported, ae.Error.Code)
+		}
+		return fmt.Errorf("openvaultdb error %d %s: %s", resp.StatusCode, ae.Error.Code, ae.Error.Message)
 	case http.StatusNotFound:
 		if key != nil {
 			return dal.NewErrNotFoundByKey(key, nil)
