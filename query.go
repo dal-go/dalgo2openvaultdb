@@ -351,9 +351,7 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 }
 
 // Ensure recordset reader is not supported.
-var _ = func() {
-	var _ dal.RecordsetReader = (*recordsetReaderUnsupported)(nil)
-}
+var _ dal.RecordsetReader = (*recordsetReaderUnsupported)(nil)
 
 type recordsetReaderUnsupported struct{}
 

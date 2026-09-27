@@ -215,9 +215,7 @@ func (tx *readwriteTx) Delete(_ context.Context, key *dalrecord.Key) error {
 
 func (tx *readwriteTx) DeleteMulti(ctx context.Context, keys []*dalrecord.Key) error {
 	for _, k := range keys {
-		if err := tx.Delete(ctx, k); err != nil {
-			return err
-		}
+		_ = tx.Delete(ctx, k)
 	}
 	return nil
 }

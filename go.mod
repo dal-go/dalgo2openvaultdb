@@ -6,7 +6,7 @@ toolchain go1.27.0
 
 require (
 	github.com/dal-go/dalgo v0.66.1
-	github.com/dal-go/record v0.1.3
+	github.com/dal-go/record v0.1.4
 )
 
 require (
