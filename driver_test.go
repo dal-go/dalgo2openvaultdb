@@ -3,6 +3,7 @@ package dalgo2openvaultdb_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dal-go/dalgo/dal"
@@ -25,6 +27,13 @@ type contactData struct {
 	Name   string `json:"name"`
 	Status string `json:"status,omitempty"`
 }
+
+type queryWithColumns struct {
+	dal.StructuredQuery
+	columns []dal.Column
+}
+
+func (q queryWithColumns) Columns() []dal.Column { return q.columns }
 
 func mustNewDB(t *testing.T, server *httptest.Server) dal.DB {
 	t.Helper()
@@ -673,6 +682,130 @@ func TestQuery_WireAndReader(t *testing.T) {
 	}
 	if !reflect.DeepEqual(names, []string{"Alice", "Bob"}) {
 		t.Errorf("names = %v, want [Alice Bob]", names)
+	}
+}
+
+func TestQuery_FieldProjectionTrimsLocallyAndPreservesJSONValues(t *testing.T) {
+	t.Parallel()
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/databases/testdb/query" {
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+			return
+		}
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"records":[{"key":"prices/p1","data":{"amount":"9007199254740993.1200","optional":null,"private":"must not escape"}}]}`))
+	}))
+	defer srv.Close()
+	db := mustNewDB(t, srv)
+	base := collectionFrom("prices").SelectKeysOnly(reflect.String)
+	q := queryWithColumns{StructuredQuery: base, columns: []dal.Column{
+		{Alias: "exact_amount", Expression: dal.Field("amount")},
+		{Expression: dal.Field("optional")},
+	}}
+	reader, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
+	if err != nil {
+		t.Fatalf("ExecuteQueryToRecordsReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var wire map[string]any
+	if err := json.Unmarshal(capturedBody, &wire); err != nil {
+		t.Fatalf("unmarshal query request: %v", err)
+	}
+	if _, exists := wire["columns"]; exists {
+		t.Fatalf("projection must remain client-side, got wire query %s", capturedBody)
+	}
+	if wire["keysOnly"] == true {
+		t.Fatalf("field projection must not be sent as a keys-only query: %s", capturedBody)
+	}
+	rec, err := reader.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	data := rec.Data().(map[string]any)
+	if data["exact_amount"] != "9007199254740993.1200" {
+		t.Errorf("exact_amount = %#v, want original decimal string", data["exact_amount"])
+	}
+	if value, exists := data["optional"]; !exists || value != nil {
+		t.Errorf("optional = %#v (present=%t), want JSON null", value, exists)
+	}
+	if _, exists := data["amount"]; exists {
+		t.Errorf("unaliased source field leaked alongside alias: %#v", data)
+	}
+	if _, exists := data["private"]; exists {
+		t.Errorf("unselected field leaked to caller: %#v", data)
+	}
+	if rec.Key().ID != "p1" {
+		t.Errorf("record key ID = %v, want p1", rec.Key().ID)
+	}
+}
+
+func TestQuery_ORPolicyRefusalDoesNotReachHTTP(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	db := mustNewDB(t, srv)
+	or := dal.NewGroupCondition(dal.Or,
+		dal.WhereField("country", dal.Equal, "IE"),
+		dal.WhereField("country", dal.Equal, "FR"),
+	)
+	q := collectionFrom("cities").Where(or).SelectKeysOnly(reflect.String)
+	_, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
+	if !errors.Is(err, dal.ErrNotSupported) {
+		t.Fatalf("ExecuteQueryToRecordsReader error = %v, want ErrNotSupported", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("HTTP request count = %d, want 0 for a refused OR query", got)
+	}
+}
+
+func TestQuery_FieldProjectionRejectsUnrepresentableJSONNumber(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"records":[{"key":"prices/p1","data":{"amount":1e1000}}]}`))
+	}))
+	defer srv.Close()
+	db := mustNewDB(t, srv)
+	base := collectionFrom("prices").SelectKeysOnly(reflect.String)
+	q := queryWithColumns{StructuredQuery: base, columns: []dal.Column{{Expression: dal.Field("amount")}}}
+	reader, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
+	if err != nil {
+		t.Fatalf("ExecuteQueryToRecordsReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	rec, err := reader.Next()
+	if err == nil {
+		t.Fatal("Next succeeded for a JSON number that cannot be represented as a Go float64")
+	}
+	if rec != nil {
+		t.Fatalf("Next returned record %#v alongside decode error %v", rec, err)
+	}
+}
+
+func TestQuery_AuthorizationUnsupportedResponseReachesServerAndWrapsError(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":{"code":"authorization_unsupported","message":"query cannot be authorized"}}`))
+	}))
+	defer srv.Close()
+	db := mustNewDB(t, srv)
+	q := collectionFrom("cities").SelectKeysOnly(reflect.String)
+	_, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
+	if !errors.Is(err, dal.ErrNotSupported) {
+		t.Fatalf("ExecuteQueryToRecordsReader error = %v, want ErrNotSupported", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("HTTP request count = %d, want 1 for a server authorization refusal", got)
 	}
 }
 
