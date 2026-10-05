@@ -788,6 +788,27 @@ func TestQuery_FieldProjectionRejectsUnrepresentableJSONNumber(t *testing.T) {
 	}
 }
 
+func TestQuery_AuthorizationUnsupportedResponseReachesServerAndWrapsError(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":{"code":"authorization_unsupported","message":"query cannot be authorized"}}`))
+	}))
+	defer srv.Close()
+	db := mustNewDB(t, srv)
+	q := collectionFrom("cities").SelectKeysOnly(reflect.String)
+	_, err := db.ExecuteQueryToRecordsReader(context.Background(), q)
+	if !errors.Is(err, dal.ErrNotSupported) {
+		t.Fatalf("ExecuteQueryToRecordsReader error = %v, want ErrNotSupported", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("HTTP request count = %d, want 1 for a server authorization refusal", got)
+	}
+}
+
 // TestQuery_KeysOnly verifies that a keys-only query sends keysOnly=true.
 func TestQuery_KeysOnly(t *testing.T) {
 	t.Parallel()
