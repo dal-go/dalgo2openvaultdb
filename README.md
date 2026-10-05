@@ -61,6 +61,7 @@ db, err := dalgo2openvaultdb.NewDB("http://127.0.0.1:6832", "sneat-dev",
 | Query `Where` operators: `==`, `<`, `<=`, `>`, `>=`, `In` | supported |
 | Query `WhereInArrayField` / `WhereArrayContains` | supported (`array-contains`) |
 | Query `WhereArrayContainsAny` | supported (`array-contains-any` via `FieldRef In Array`) |
+| Query direct field projections (`FieldRef`) | supported (trimmed client-side) |
 | Read-your-writes in same transaction (Set/Insert) | supported (buffer) |
 | `SupportsConcurrentConnections()` | `true` (HTTP pooling) |
 | `Schema()` | returns `nil` (schemaless) |
@@ -69,11 +70,19 @@ db, err := dalgo2openvaultdb.NewDB("http://127.0.0.1:6832", "sneat-dev",
 | `ExecuteQueryToRecordsetReader` | `ErrNotSupported` |
 | Query cursors / `StartFrom` | `ErrNotSupported` |
 | Query `Offset` | `ErrNotSupported` |
-| Query column projections (`Columns`) | `ErrNotSupported` |
+| Query expression, aggregate, wildcard, and nested field projections | `ErrNotSupported` |
 | Query `GroupBy` / `Having` | `ErrNotSupported` |
 | Collection-group queries | not supported by OpenVaultDB MVP |
 | Cross-transaction isolation / optimistic concurrency | not in OpenVaultDB MVP |
 | Read-your-writes for `Update` ops inside same tx | server resolves in batch order |
+
+Direct field projections are applied by the client adapter after the regular
+OpenVaultDB query response arrives. The HTTP query API has no projection
+parameter, so this does not reduce the fields transferred over HTTP. The
+server remains authoritative for authorization, and the adapter removes
+unselected fields before returning records to DALgo callers. Aggregate
+queries may use these projections as source reads and calculate results in
+DALgo; aggregates themselves are not sent to OpenVaultDB.
 
 ## Local development
 

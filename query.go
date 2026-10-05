@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/dal-go/dalgo/dal"
 	"github.com/dal-go/dalgo/recordset"
@@ -33,9 +34,51 @@ type wireQuery struct {
 	KeysOnly   bool              `json:"keysOnly,omitempty"`
 }
 
+type projectedField struct {
+	source string
+	output string
+}
+
+// queryProjection accepts only direct field references. Projections are
+// applied locally because the OpenVaultDB query endpoint has no projection
+// parameter; the server still applies its own authorization to the full read.
+func queryProjection(q dal.StructuredQuery) ([]projectedField, error) {
+	columns := q.Columns()
+	if len(columns) == 0 {
+		return nil, nil
+	}
+	base := q.From().Base()
+	baseName := base.Name()
+	baseAlias := base.Alias()
+	projection := make([]projectedField, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		field, ok := column.Expression.(dal.FieldRef)
+		if !ok {
+			return nil, fmt.Errorf("%w: projection must be a direct FieldRef", dal.ErrNotSupported)
+		}
+		if field.IsID() || field.Name() == "" || strings.Contains(field.Name(), ".") {
+			return nil, fmt.Errorf("%w: unsupported projected field %q", dal.ErrNotSupported, field.Name())
+		}
+		if src := field.Source(); src != "" && src != baseName && src != baseAlias {
+			return nil, fmt.Errorf("%w: projection source %q does not match %q", dal.ErrNotSupported, src, baseName)
+		}
+		output := column.Alias
+		if output == "" {
+			output = field.Name()
+		}
+		if _, exists := seen[output]; exists {
+			return nil, fmt.Errorf("%w: duplicate projected field alias %q", dal.ErrNotSupported, output)
+		}
+		seen[output] = struct{}{}
+		projection = append(projection, projectedField{source: field.Name(), output: output})
+	}
+	return projection, nil
+}
+
 // buildWireQuery converts a dal.StructuredQuery to wireQuery.
 // Returns ErrNotSupported for unsupported features (offset, cursor, group-by,
-// having, columns, OR conditions).
+// having, non-field projections, OR conditions).
 func buildWireQuery(q dal.StructuredQuery) (wireQuery, error) {
 	if q.Offset() > 0 {
 		return wireQuery{}, fmt.Errorf("%w: query offset", dal.ErrNotSupported)
@@ -49,8 +92,9 @@ func buildWireQuery(q dal.StructuredQuery) (wireQuery, error) {
 	if q.Having() != nil {
 		return wireQuery{}, fmt.Errorf("%w: query having", dal.ErrNotSupported)
 	}
-	if len(q.Columns()) > 0 {
-		return wireQuery{}, fmt.Errorf("%w: query column projection", dal.ErrNotSupported)
+	projection, err := queryProjection(q)
+	if err != nil {
+		return wireQuery{}, err
 	}
 
 	wq := wireQuery{
@@ -66,7 +110,7 @@ func buildWireQuery(q dal.StructuredQuery) (wireQuery, error) {
 	}
 
 	// Keys-only: IntoRecord nil and IDKind is set.
-	if q.IntoRecord() == nil && q.IDKind() != reflect.Invalid {
+	if q.IntoRecord() == nil && len(projection) == 0 && q.IDKind() != reflect.Invalid {
 		wq.KeysOnly = true
 	}
 
@@ -213,11 +257,12 @@ type wireQueryRecord struct {
 
 // queryRecordsReader implements dal.RecordsReader over a slice of wireQueryRecord.
 type queryRecordsReader struct {
-	records  []wireQueryRecord
-	pos      int
-	intoRec  func() dalrecord.Record
-	idKind   reflect.Kind
-	keysOnly bool
+	records    []wireQueryRecord
+	pos        int
+	intoRec    func() dalrecord.Record
+	idKind     reflect.Kind
+	keysOnly   bool
+	projection []projectedField
 }
 
 func (r *queryRecordsReader) Next() (dalrecord.Record, error) {
@@ -236,8 +281,21 @@ func (r *queryRecordsReader) Next() (dalrecord.Record, error) {
 	key := dalrecord.NewKeyWithID(collection, id)
 
 	var rec dalrecord.Record
-	if r.keysOnly || r.intoRec == nil {
+	if r.keysOnly || (r.intoRec == nil && len(r.projection) == 0) {
 		rec = dalrecord.NewRecord(key)
+		rec.SetError(nil)
+	} else if r.intoRec == nil {
+		data := make(map[string]any)
+		if len(wr.Data) > 0 && string(wr.Data) != "null" {
+			projected, err := projectJSONData(wr.Data, r.projection)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(projected, &data); err != nil {
+				return nil, fmt.Errorf("unmarshal projected query record data: %w", err)
+			}
+		}
+		rec = dalrecord.NewRecordWithData(key, data)
 		rec.SetError(nil)
 	} else {
 		tmpl := r.intoRec()
@@ -248,12 +306,36 @@ func (r *queryRecordsReader) Next() (dalrecord.Record, error) {
 		rec = dalrecord.NewRecordWithData(key, data)
 		rec.SetError(nil)
 		if len(wr.Data) > 0 && string(wr.Data) != "null" {
-			if err := json.Unmarshal(wr.Data, rec.Data()); err != nil {
+			data := wr.Data
+			if len(r.projection) > 0 {
+				data, err = projectJSONData(data, r.projection)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err := json.Unmarshal(data, rec.Data()); err != nil {
 				return nil, fmt.Errorf("unmarshal query record data: %w", err)
 			}
 		}
 	}
 	return rec, nil
+}
+
+func projectJSONData(data json.RawMessage, projection []projectedField) (json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("unmarshal query record data for projection: %w", err)
+	}
+	trimmed := make(map[string]json.RawMessage, len(projection))
+	for _, field := range projection {
+		if value, ok := fields[field.source]; ok {
+			trimmed[field.output] = value
+		}
+	}
+	// Values came from a successful JSON decode, so each RawMessage is valid
+	// JSON and encoding this object cannot fail.
+	encoded, _ := json.Marshal(trimmed)
+	return encoded, nil
 }
 
 func (r *queryRecordsReader) Cursor() (string, error) { return "", nil }
@@ -330,6 +412,10 @@ func unescapeSegment(s string) string {
 
 // newQueryRecordsReader parses the raw query response and returns a reader.
 func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReader, error) {
+	projection, err := queryProjection(q)
+	if err != nil {
+		return nil, err
+	}
 	var resp wireQueryResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("parse query response: %w", err)
@@ -340,13 +426,14 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 		intoRec = nil
 	}
 
-	keysOnly := q.IntoRecord() == nil && q.IDKind() != reflect.Invalid
+	keysOnly := q.IntoRecord() == nil && len(projection) == 0 && q.IDKind() != reflect.Invalid
 
 	return &queryRecordsReader{
-		records:  resp.Records,
-		intoRec:  intoRec,
-		idKind:   q.IDKind(),
-		keysOnly: keysOnly,
+		records:    resp.Records,
+		intoRec:    intoRec,
+		idKind:     q.IDKind(),
+		keysOnly:   keysOnly,
+		projection: projection,
 	}, nil
 }
 

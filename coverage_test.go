@@ -57,8 +57,6 @@ type dummyExpression struct{}
 
 func (dummyExpression) String() string { return "dummy" }
 
-
-
 func colFrom(name string) *dal.QueryBuilder {
 	return dal.NewQueryBuilder(dal.From(dal.NewRootCollectionRef(name, "")))
 }
@@ -271,8 +269,28 @@ func TestQuery_BuildAndWire(t *testing.T) {
 
 	// Columns
 	qCols := colFrom("docs").SelectColumns(dal.Column{Expression: dal.Field("name")})
-	if _, err := buildWireQuery(qCols); err == nil {
-		t.Fatal("expected Columns error")
+	if _, err := buildWireQuery(qCols); err != nil {
+		t.Fatalf("direct FieldRef projection should be supported: %v", err)
+	}
+	qExpr := colFrom("docs").SelectColumns(dal.Column{Expression: dummyExpression{}})
+	if _, err := buildWireQuery(qExpr); err == nil {
+		t.Fatal("expected expression projection error")
+	}
+	qWildcard := colFrom("docs").SelectColumns(dal.Column{})
+	if _, err := buildWireQuery(qWildcard); err == nil {
+		t.Fatal("expected wildcard projection error")
+	}
+	for name, cols := range map[string][]dal.Column{
+		"mismatched source": {{Expression: dal.NewFieldRef("elsewhere", "name")}},
+		"duplicate alias": {
+			{Alias: "same", Expression: dal.Field("name")},
+			{Alias: "same", Expression: dal.Field("title")},
+		},
+		"dotted field": {{Expression: dal.Field("nested.name")}},
+	} {
+		if _, err := buildWireQuery(colFrom("docs").SelectColumns(cols...)); err == nil {
+			t.Errorf("expected %s projection error", name)
+		}
 	}
 
 	// Parent subcollection query
@@ -422,6 +440,14 @@ func TestQuery_ReaderAndPaths(t *testing.T) {
 	if _, err := newQueryRecordsReader([]byte(`{invalid`), q); err == nil {
 		t.Fatal("expected error on invalid reader json")
 	}
+	projectedQuery := colFrom("docs").SelectColumns(dal.Column{Alias: "name", Expression: dal.Field("name")})
+	if _, err := newQueryRecordsReader([]byte(`{invalid`), projectedQuery); err == nil {
+		t.Fatal("expected projected reader to reject invalid response json")
+	}
+	unsupportedProjection := colFrom("docs").SelectColumns(dal.Column{Expression: dal.Count()})
+	if _, err := newQueryRecordsReader([]byte(`{"records":[]}`), unsupportedProjection); err == nil {
+		t.Fatal("expected projected reader to reject unsupported projection")
+	}
 
 	// queryRecordsReader.Next key parsing error
 	reader := &queryRecordsReader{
@@ -438,12 +464,36 @@ func TestQuery_ReaderAndPaths(t *testing.T) {
 		records: []wireQueryRecord{
 			{Key: "docs/1", Data: json.RawMessage(`"not-an-object"`)},
 		},
+		projection: []projectedField{{source: "name", output: "name"}},
 		intoRec: func() dalrecord.Record {
 			return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("docs", "tmpl"), &testDoc{})
 		},
 	}
 	if _, err := readerDataErr.Next(); err == nil {
 		t.Fatal("expected error on data unmarshal in Next()")
+	}
+	readerTypedDataErr := &queryRecordsReader{
+		records: []wireQueryRecord{{Key: "docs/1", Data: json.RawMessage(`"not-an-object"`)}},
+		intoRec: func() dalrecord.Record {
+			return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("docs", "tmpl"), &testDoc{})
+		},
+	}
+	if _, err := readerTypedDataErr.Next(); err == nil {
+		t.Fatal("expected typed record data unmarshal error")
+	}
+	readerProjectionErr := &queryRecordsReader{
+		records:    []wireQueryRecord{{Key: "docs/1", Data: json.RawMessage(`[]`)}},
+		projection: []projectedField{{source: "name", output: "name"}},
+	}
+	if _, err := readerProjectionErr.Next(); err == nil {
+		t.Fatal("expected error when projected record data is not an object")
+	}
+	readerProjectedNumberErr := &queryRecordsReader{
+		records:    []wireQueryRecord{{Key: "docs/1", Data: json.RawMessage(`{"count":1e1000}`)}},
+		projection: []projectedField{{source: "count", output: "count"}},
+	}
+	if _, err := readerProjectedNumberErr.Next(); err == nil {
+		t.Fatal("expected error when projected JSON number cannot be represented as float64")
 	}
 
 	// Cursor and Close
@@ -1079,4 +1129,3 @@ func TestTX_SuccessfulPaths(t *testing.T) {
 		t.Fatalf("expected successful roTx.ExecuteQueryToRecordsReader: %v, %v", err, reader)
 	}
 }
-
