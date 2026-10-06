@@ -245,11 +245,6 @@ func marshalWireQuery(wq wireQuery) ([]byte, error) {
 	return b, nil
 }
 
-// wireQueryResponse is the shape of the POST /query response.
-type wireQueryResponse struct {
-	Records []wireQueryRecord `json:"records"`
-}
-
 // wireQueryRecord is a single record in the query response.
 type wireQueryRecord struct {
 	Key  string          `json:"key"`
