@@ -119,23 +119,7 @@ func (db *database) GetMulti(ctx context.Context, records []dalrecord.Record) er
 
 // ExecuteQueryToRecordsReader executes a structured query and returns a reader.
 func (db *database) ExecuteQueryToRecordsReader(ctx context.Context, query dal.Query) (dal.RecordsReader, error) {
-	q, ok := query.(dal.StructuredQuery)
-	if !ok {
-		return nil, fmt.Errorf("%w: non-structured query", dal.ErrNotSupported)
-	}
-	wq, err := buildWireQuery(q)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := marshalWireQuery(wq)
-	if err != nil {
-		return nil, err
-	}
-	body, err := db.c.postQuery(ctx, payload)
-	if err != nil {
-		return nil, err
-	}
-	return newQueryRecordsReader(body, q)
+	return db.c.executeQuery(ctx, query)
 }
 
 // ExecuteQueryToRecordsetReader always returns ErrNotSupported.

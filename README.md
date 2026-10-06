@@ -84,6 +84,43 @@ unselected fields before returning records to DALgo callers. Aggregate
 queries may use these projections as source reads and calculate results in
 DALgo; aggregates themselves are not sent to OpenVaultDB.
 
+## Source rights and live-read evidence
+
+Query readers preserve optional `sourceRights` and `usedSourceIds` inventories.
+Use `dal.ReadQueryMetadata(reader)` before `Next` to read a detached snapshot,
+including attribution, original free-source links and transformations. Omitted
+metadata remains unknown; supplied empty arrays remain known-empty. Source usage
+comes from execution metadata, including empty results and projected-away fields.
+These inventories describe source terms, not a licence assigned to query output.
+
+For an independently admitted proxy query, call
+`RequireProviderReads(ctx, plan, admittedUsedSourceIDs)` before executing it.
+The `providerreads.Plan` must come from trusted admission metadata, separately
+from the response, and bind the expected executor, database, collection, original
+resource, definition, decoder and complete source rights. Supply independently
+admitted actual-use expectations and a fresh 32-character lowercase hex execution
+ID for each query. The returned context is for that single query execution.
+
+The adapter freezes the plan and usage expectations, sends `OVDB-Execution-ID`
+and request `Cache-Control: no-store`, refuses redirects, caps the response at
+4 MiB and caps the HTTP client timeout at ten seconds. It requires response
+`no-store` and validates full rights/usage equality plus the closed
+`ovdb-provider-read/1` envelope before parsing records or returning a reader.
+Missing or malformed required evidence fails closed, including on empty results.
+`ReadProviderReads(reader)` returns a detached envelope with reference date,
+fetch time, consumed-body digest and byte count. It carries executor observations;
+it does not certify immutable live input or grant source rights.
+
+Without the required context, supplied envelopes are decoded and preserved as
+provider claims. They are not checked against independent admission. The strict
+path supports direct structured adapter queries, including transaction query
+methods. DALgo's generic joins, aggregation and federation are outside this
+admitted route; generic wrappers can omit adapter-local capabilities. Consumers
+must require `ReadProviderReads` on the returned reader before accessing data.
+No source activation, retained-copy fallback or data persistence is provided by
+this capability. Callers remain responsible for trusted endpoint selection and
+their own storage, cache, logging and result-lifetime controls.
+
 ## Local development
 
 1. Start the server:
