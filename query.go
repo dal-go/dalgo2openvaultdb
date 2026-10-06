@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dal-go/dalgo/dal"
+	"github.com/dal-go/dalgo/datarights"
 	"github.com/dal-go/dalgo/recordset"
 	dalrecord "github.com/dal-go/record"
 )
@@ -244,11 +245,6 @@ func marshalWireQuery(wq wireQuery) ([]byte, error) {
 	return b, nil
 }
 
-// wireQueryResponse is the shape of the POST /query response.
-type wireQueryResponse struct {
-	Records []wireQueryRecord `json:"records"`
-}
-
 // wireQueryRecord is a single record in the query response.
 type wireQueryRecord struct {
 	Key  string          `json:"key"`
@@ -416,9 +412,21 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 	if err != nil {
 		return nil, err
 	}
-	var resp wireQueryResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	fields, err := decodeQueryFields(body)
+	if err != nil {
 		return nil, fmt.Errorf("parse query response: %w", err)
+	}
+	metadata, evidence, err := queryResponseMetadata(fields, nil)
+	if err != nil {
+		return nil, err
+	}
+	return recordsReaderFromFields(fields, q, projection, metadata, evidence, false)
+}
+
+func recordsReaderFromFields(fields map[string]json.RawMessage, q dal.StructuredQuery, projection []projectedField, metadata datarights.QueryMetadata, evidence json.RawMessage, required bool) (dal.RecordsReader, error) {
+	var records []wireQueryRecord
+	if err := json.Unmarshal(fields["records"], &records); err != nil {
+		return nil, fmt.Errorf("parse query records: %w", err)
 	}
 
 	intoRec := func() dalrecord.Record { return q.IntoRecord() }
@@ -428,13 +436,17 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 
 	keysOnly := q.IntoRecord() == nil && len(projection) == 0 && q.IDKind() != reflect.Invalid
 
-	return &queryRecordsReader{
-		records:    resp.Records,
+	reader := &queryRecordsReader{
+		records:    records,
 		intoRec:    intoRec,
 		idKind:     q.IDKind(),
 		keysOnly:   keysOnly,
 		projection: projection,
-	}, nil
+	}
+	if metadata.SourceRights != nil || metadata.UsedSourceIDs != nil || len(evidence) != 0 {
+		return &queryMetadataReader{RecordsReader: reader, metadata: metadata.Clone(), evidence: append(json.RawMessage(nil), evidence...), required: required}, nil
+	}
+	return reader, nil
 }
 
 // Ensure recordset reader is not supported.

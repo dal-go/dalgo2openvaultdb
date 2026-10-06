@@ -105,23 +105,7 @@ func (tx *readwriteTx) GetMulti(ctx context.Context, records []dalrecord.Record)
 }
 
 func (tx *readwriteTx) ExecuteQueryToRecordsReader(ctx context.Context, query dal.Query) (dal.RecordsReader, error) {
-	q, ok := query.(dal.StructuredQuery)
-	if !ok {
-		return nil, fmt.Errorf("%w: non-structured query", dal.ErrNotSupported)
-	}
-	wq, err := buildWireQuery(q)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := marshalWireQuery(wq)
-	if err != nil {
-		return nil, err
-	}
-	body, err := tx.c.postQuery(ctx, payload)
-	if err != nil {
-		return nil, err
-	}
-	return newQueryRecordsReader(body, q)
+	return tx.c.executeQuery(ctx, query)
 }
 
 func (tx *readwriteTx) ExecuteQueryToRecordsetReader(_ context.Context, _ dal.Query, _ ...recordset.Option) (dal.RecordsetReader, error) {
@@ -303,23 +287,7 @@ func (tx *readonlyTx) GetMulti(ctx context.Context, records []dalrecord.Record) 
 }
 
 func (tx *readonlyTx) ExecuteQueryToRecordsReader(ctx context.Context, query dal.Query) (dal.RecordsReader, error) {
-	q, ok := query.(dal.StructuredQuery)
-	if !ok {
-		return nil, fmt.Errorf("%w: non-structured query", dal.ErrNotSupported)
-	}
-	wq, err := buildWireQuery(q)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := marshalWireQuery(wq)
-	if err != nil {
-		return nil, err
-	}
-	body, err := tx.c.postQuery(ctx, payload)
-	if err != nil {
-		return nil, err
-	}
-	return newQueryRecordsReader(body, q)
+	return tx.c.executeQuery(ctx, query)
 }
 
 func (tx *readonlyTx) ExecuteQueryToRecordsetReader(_ context.Context, _ dal.Query, _ ...recordset.Option) (dal.RecordsetReader, error) {

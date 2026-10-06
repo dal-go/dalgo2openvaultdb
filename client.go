@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dal-go/dalgo/dal"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	dalrecord "github.com/dal-go/record"
 )
@@ -115,17 +118,60 @@ func (c *httpClient) postQuery(ctx context.Context, payload []byte) ([]byte, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.do(req)
+	required, _ := ctx.Value(providerReadContextKey{}).(*requiredProviderReads)
+	client := c.client
+	if required != nil {
+		req.Header.Set("OVDB-Execution-ID", required.plan.Execution.ID)
+		req.Header.Set("Cache-Control", "no-store")
+		copyClient := *c.client
+		copyClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("provider query redirects are forbidden")
+		}
+		if copyClient.Timeout == 0 || copyClient.Timeout > 10*time.Second {
+			copyClient.Timeout = 10 * time.Second
+		}
+		client = &copyClient
+	}
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		if required != nil {
+			return nil, fmt.Errorf("required provider query transport failed")
+		}
 		return nil, fmt.Errorf("POST query: %w", err)
 	}
 	if resp.StatusCode == http.StatusOK {
 		defer func() { _ = resp.Body.Close() }()
-		body, err := io.ReadAll(resp.Body)
+		reader := io.Reader(resp.Body)
+		if required != nil {
+			noStore := false
+			for _, value := range resp.Header.Values("Cache-Control") {
+				for _, directive := range strings.Split(value, ",") {
+					noStore = noStore || strings.EqualFold(strings.TrimSpace(directive), "no-store")
+				}
+			}
+			if !noStore {
+				return nil, fmt.Errorf("provider query response requires no-store")
+			}
+			reader = io.LimitReader(resp.Body, maxProviderQueryBytes+1)
+		}
+		body, err := io.ReadAll(reader)
 		if err != nil {
+			if required != nil {
+				return nil, fmt.Errorf("required provider query response read failed")
+			}
 			return nil, fmt.Errorf("read query response: %w", err)
 		}
+		if required != nil && len(body) > maxProviderQueryBytes {
+			return nil, fmt.Errorf("provider query response exceeds byte budget")
+		}
 		return body, nil
+	}
+	if required != nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("provider query HTTP status %d", resp.StatusCode)
 	}
 	return nil, mapHTTPError(resp, nil)
 }
@@ -144,4 +190,52 @@ func unmarshalRecord(body []byte, record dalrecord.Record) error {
 		return fmt.Errorf("unmarshal record data: %w", err)
 	}
 	return nil
+}
+
+const maxProviderQueryBytes = 4 * 1024 * 1024
+
+func (c *httpClient) executeQuery(ctx context.Context, query dal.Query) (dal.RecordsReader, error) {
+	q, ok := query.(dal.StructuredQuery)
+	if !ok {
+		return nil, fmt.Errorf("%w: non-structured query", dal.ErrNotSupported)
+	}
+	wq, err := buildWireQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	required, _ := ctx.Value(providerReadContextKey{}).(*requiredProviderReads)
+	if required != nil {
+		if err := required.validateTarget(c.databaseID, wq.Collection, wq.Parent); err != nil {
+			return nil, err
+		}
+	}
+	payload, err := marshalWireQuery(wq)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.postQuery(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	if required == nil {
+		return newQueryRecordsReader(body, q)
+	}
+	fields, err := decodeQueryFields(body)
+	if err != nil {
+		return nil, errRequiredQueryResponse
+	}
+	if len(fields["providerReads"]) == 0 {
+		return nil, errRequiredProviderEvidenceMissing
+	}
+	metadata, evidence, err := queryResponseMetadata(fields, required)
+	if err != nil {
+		return nil, errRequiredProviderReads
+	}
+	// buildWireQuery already validated this projection before HTTP.
+	projection, _ := queryProjection(q)
+	reader, err := recordsReaderFromFields(fields, q, projection, metadata, evidence, true)
+	if err != nil {
+		return nil, errRequiredQueryResponse
+	}
+	return reader, nil
 }
