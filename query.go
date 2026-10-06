@@ -420,10 +420,10 @@ func newQueryRecordsReader(body []byte, q dal.StructuredQuery) (dal.RecordsReade
 	if err != nil {
 		return nil, err
 	}
-	return recordsReaderFromFields(fields, q, projection, metadata, evidence)
+	return recordsReaderFromFields(fields, q, projection, metadata, evidence, false)
 }
 
-func recordsReaderFromFields(fields map[string]json.RawMessage, q dal.StructuredQuery, projection []projectedField, metadata datarights.QueryMetadata, evidence json.RawMessage) (dal.RecordsReader, error) {
+func recordsReaderFromFields(fields map[string]json.RawMessage, q dal.StructuredQuery, projection []projectedField, metadata datarights.QueryMetadata, evidence json.RawMessage, required bool) (dal.RecordsReader, error) {
 	var records []wireQueryRecord
 	if err := json.Unmarshal(fields["records"], &records); err != nil {
 		return nil, fmt.Errorf("parse query records: %w", err)
@@ -444,7 +444,7 @@ func recordsReaderFromFields(fields map[string]json.RawMessage, q dal.Structured
 		projection: projection,
 	}
 	if metadata.SourceRights != nil || metadata.UsedSourceIDs != nil || len(evidence) != 0 {
-		return &queryMetadataReader{RecordsReader: reader, metadata: metadata.Clone(), evidence: append(json.RawMessage(nil), evidence...)}, nil
+		return &queryMetadataReader{RecordsReader: reader, metadata: metadata.Clone(), evidence: append(json.RawMessage(nil), evidence...), required: required}, nil
 	}
 	return reader, nil
 }

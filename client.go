@@ -137,6 +137,9 @@ func (c *httpClient) postQuery(ctx context.Context, payload []byte) ([]byte, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if required != nil {
+			return nil, fmt.Errorf("required provider query transport failed")
+		}
 		return nil, fmt.Errorf("POST query: %w", err)
 	}
 	if resp.StatusCode == http.StatusOK {
@@ -156,6 +159,9 @@ func (c *httpClient) postQuery(ctx context.Context, payload []byte) ([]byte, err
 		}
 		body, err := io.ReadAll(reader)
 		if err != nil {
+			if required != nil {
+				return nil, fmt.Errorf("required provider query response read failed")
+			}
 			return nil, fmt.Errorf("read query response: %w", err)
 		}
 		if required != nil && len(body) > maxProviderQueryBytes {
@@ -216,13 +222,20 @@ func (c *httpClient) executeQuery(ctx context.Context, query dal.Query) (dal.Rec
 	}
 	fields, err := decodeQueryFields(body)
 	if err != nil {
-		return nil, fmt.Errorf("parse query response: %w", err)
+		return nil, errRequiredQueryResponse
+	}
+	if len(fields["providerReads"]) == 0 {
+		return nil, errRequiredProviderEvidenceMissing
 	}
 	metadata, evidence, err := queryResponseMetadata(fields, required)
 	if err != nil {
-		return nil, err
+		return nil, errRequiredProviderReads
 	}
 	// buildWireQuery already validated this projection before HTTP.
 	projection, _ := queryProjection(q)
-	return recordsReaderFromFields(fields, q, projection, metadata, evidence)
+	reader, err := recordsReaderFromFields(fields, q, projection, metadata, evidence, true)
+	if err != nil {
+		return nil, errRequiredQueryResponse
+	}
+	return reader, nil
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dal-go/dalgo/dal"
+	dalrecord "github.com/dal-go/record"
 	"github.com/openvaultdb/openvaultdb-go/pkg/license"
 	"github.com/openvaultdb/openvaultdb-go/pkg/providerreads"
 )
@@ -361,5 +362,107 @@ func TestMetadataUnicodeEscapes(t *testing.T) {
 	reader, err := newQueryRecordsReader([]byte(`{"records":[],"usedSourceIds":["\ud800"]}`), colFrom("synthetic-rates").SelectIntoRecord(nil))
 	if err == nil || reader != nil {
 		t.Fatal("invalid wire metadata exposed reader")
+	}
+}
+
+type leakingSyntheticData struct{}
+
+type typedSyntheticData struct {
+	Rate int `json:"SYNTHETIC-ROW-BODY-SENTINEL"`
+}
+
+func (*leakingSyntheticData) UnmarshalJSON([]byte) error {
+	return errors.New("SYNTHETIC-ROW-BODY-SENTINEL")
+}
+
+type leakingSyntheticBody struct{}
+
+func (leakingSyntheticBody) Read([]byte) (int, error) {
+	return 0, errors.New("SYNTHETIC-RESPONSE-BODY-SENTINEL")
+}
+func (leakingSyntheticBody) Close() error { return nil }
+
+func TestRequiredErrorsSanitizeMetadataRowsAndTransport(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		for _, scenario := range []string{"evidence field", "row key", "row decoder", "row numeric", "transport", "body read"} {
+			t.Run(scenario+"/required="+string(encodeSynthetic(t, required)), func(t *testing.T) {
+				plan, used, response := syntheticProviderResponse(t)
+				ctx := context.Background()
+				if required {
+					var err error
+					ctx, err = RequireProviderReads(ctx, plan, used)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				query := colFrom("synthetic-rates").SelectIntoRecord(nil)
+				if scenario == "row key" {
+					response["records"] = []any{map[string]any{"key": "SYNTHETIC-ROW-BODY-SENTINEL", "data": map[string]any{}}}
+				}
+				if scenario == "row decoder" {
+					query = colFrom("synthetic-rates").SelectIntoRecord(func() dalrecord.Record {
+						return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("synthetic-rates", ""), &leakingSyntheticData{})
+					})
+				}
+				if scenario == "row numeric" {
+					response["records"] = []any{map[string]any{"key": "synthetic-rates/FAB", "data": map[string]any{"SYNTHETIC-ROW-BODY-SENTINEL": "not an integer"}}}
+					query = colFrom("synthetic-rates").SelectIntoRecord(func() dalrecord.Record {
+						return dalrecord.NewRecordWithData(dalrecord.NewKeyWithID("synthetic-rates", ""), &typedSyntheticData{})
+					})
+				}
+				raw := encodeSynthetic(t, response)
+				if scenario == "evidence field" {
+					raw = []byte(strings.Replace(string(raw), `"providerReads":{`, `"providerReads":{"SYNTHETIC-RESPONSE-BODY-SENTINEL":true,`, 1))
+				}
+				client := syntheticClient(raw, http.Header{"Cache-Control": {"no-store"}})
+				if scenario == "transport" {
+					client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return nil, errors.New("SYNTHETIC-RESPONSE-BODY-SENTINEL")
+					})
+				}
+				if scenario == "body read" {
+					client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: 200, Header: http.Header{"Cache-Control": {"no-store"}}, Body: leakingSyntheticBody{}}, nil
+					})
+				}
+				c := &httpClient{baseURL: "https://synthetic.example", databaseID: "synthetic-db", client: client}
+				reader, err := c.executeQuery(ctx, query)
+				if scenario == "row key" || scenario == "row decoder" || scenario == "row numeric" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					var record dalrecord.Record
+					record, err = reader.Next()
+					if required && record != nil {
+						t.Fatal("failed required decode exposed a record")
+					}
+				}
+				if err == nil {
+					t.Fatal("invalid synthetic result accepted")
+				}
+				if strings.Contains(err.Error(), "SYNTHETIC-") == required {
+					t.Fatalf("required sanitization or optional compatibility failed: %v", err)
+				}
+				if required && errors.Unwrap(err) != nil {
+					t.Fatal("required error retains a sensitive cause")
+				}
+			})
+		}
+	}
+}
+
+type syntheticNextErrorReader struct {
+	dal.RecordsReader
+	err error
+}
+
+func (r syntheticNextErrorReader) Next() (dalrecord.Record, error) { return nil, r.err }
+
+func TestRequiredEndSentinelCannotCarrySensitiveCause(t *testing.T) {
+	err := errors.Join(errors.New("SYNTHETIC-ROW-BODY-SENTINEL"), dal.ErrNoMoreRecords)
+	reader := &queryMetadataReader{RecordsReader: syntheticNextErrorReader{err: err}, required: true}
+	record, got := reader.Next()
+	if record != nil || got != dal.ErrNoMoreRecords || strings.Contains(got.Error(), "SYNTHETIC-") {
+		t.Fatalf("required end sentinel retained a source-derived cause: %v", got)
 	}
 }

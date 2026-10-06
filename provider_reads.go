@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/dal-go/dalgo/dal"
 	"github.com/dal-go/dalgo/datarights"
+	dalrecord "github.com/dal-go/record"
 	"github.com/openvaultdb/openvaultdb-go/pkg/providerreads"
 )
 
@@ -91,6 +93,25 @@ type queryMetadataReader struct {
 	dal.RecordsReader
 	metadata datarights.QueryMetadata
 	evidence json.RawMessage
+	required bool
+}
+
+var errRequiredQueryResponse = errors.New("required provider query response rejected")
+var errRequiredProviderReads = errors.New("required provider reads rejected")
+var errRequiredProviderEvidenceMissing = errors.New("required provider evidence missing")
+var errRequiredQueryRecord = errors.New("required provider query record rejected")
+
+// Decoder errors can contain row keys, field names, or custom decoder messages.
+// Required no-retention executions expose a fixed error and no underlying cause.
+func (r *queryMetadataReader) Next() (dalrecord.Record, error) {
+	record, err := r.RecordsReader.Next()
+	if r.required && err != nil {
+		if errors.Is(err, dal.ErrNoMoreRecords) {
+			return nil, dal.ErrNoMoreRecords
+		}
+		return nil, errRequiredQueryRecord
+	}
+	return record, err
 }
 
 func (r *queryMetadataReader) QueryMetadata() datarights.QueryMetadata { return r.metadata.Clone() }

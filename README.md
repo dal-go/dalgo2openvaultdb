@@ -107,6 +107,10 @@ and request `Cache-Control: no-store`, refuses redirects, caps the response at
 `no-store` and validates full rights/usage equality plus the closed
 `ovdb-provider-read/1` envelope before parsing records or returning a reader.
 Missing or malformed required evidence fails closed, including on empty results.
+Required-mode response, metadata and row-decoding failures use fixed errors
+without response content or an underlying decoder cause. The trusted
+`dal.ErrNoMoreRecords` sentinel is preserved. Optional legacy diagnostics retain
+their existing behavior.
 `ReadProviderReads(reader)` returns a detached envelope with reference date,
 fetch time, consumed-body digest and byte count. It carries executor observations;
 it does not certify immutable live input or grant source rights.
