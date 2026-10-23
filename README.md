@@ -44,6 +44,31 @@ db, err := dalgo2openvaultdb.NewDB("http://127.0.0.1:6832", "sneat-dev",
     dalgo2openvaultdb.WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 ```
 
+### Guarded reads for an operator-bound credential
+
+When an operator, not the caller, decides where a bearer token may be sent
+(for example a CLI daemon that reads OVDB on behalf of one local session),
+use `WithGuardedReads`:
+
+```go
+db, err := dalgo2openvaultdb.NewDB(baseURL, "crm",
+    dalgo2openvaultdb.WithBearerToken(token),
+    dalgo2openvaultdb.WithGuardedReads("alice"))
+```
+
+The DB then only runs structured queries, and only for a context whose
+`access.Principal` has the legacy ID `"alice"` and no Subject. Queries go to
+the ACL-evaluated `/v1/databases/{db}/tugql` route as TugQL. A 401/403 the
+server explains comes back as `*AuthorizationError` (its `Decision` is the
+validated `tugql/authorization` result; it wraps `access.ErrAccessDenied`).
+Requests are capped at 1 MiB, responses at 8 MiB and each query at 10 s;
+redirects are refused; the response must be one JSON object without duplicate
+keys; record keys must be `<collection>/<escaped id>`; errors never include
+response text, the URL or the token. `Get`, `Exists`, `GetMulti` and
+transactions return `dal.ErrNotSupported`. `NewDB` rejects a base URL that is
+not plain `http(s)` (user info, query or fragment), a database ID with path
+characters or padding, and an empty token or principal.
+
 ## Supported DALgo capabilities
 
 | Capability | Status |

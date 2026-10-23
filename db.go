@@ -42,6 +42,8 @@ type database struct {
 
 	id string
 	c  httpClient
+
+	guardedPrincipal *string // set by WithGuardedReads
 }
 
 // NewDB creates a new DALgo DB backed by OpenVaultDB. The returned dal.DB is
@@ -67,6 +69,9 @@ func NewDB(baseURL, databaseID string, opts ...Option) (dal.DB, error) {
 	}
 	for _, o := range opts {
 		o(db)
+	}
+	if db.guardedPrincipal != nil {
+		return newGuardedDB(db)
 	}
 	return dal.NewDB(db), nil
 }
