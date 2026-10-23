@@ -163,9 +163,9 @@ func TestGuardedQueryResponses(t *testing.T) {
 		"oversized":            {200, "application/json", `{"records":[],"pad":"` + strings.Repeat("x", GuardedMaxResponseBytes) + `"}`, "exceeds size limit"},
 		"denial without body":  {403, "application/json", `{"error":{"code":"forbidden"}}`, "dalgo access denied"},
 		"unauthorized":         {401, "application/json", `{"error":{"code":"unauthorized"}}`, "dalgo access denied"},
-		"ambiguous denial":     {403, "application/json", `{"authorization":` + guardedDenial + `,"error":{"authorization":` + guardedDenial + `}}`, "dalgo access denied"},
+		"ambiguous denial":     {403, "application/json", `{"authorization":` + guardedDenial + `,"error":{"authorization":` + guardedDenial + `}}`, "invalid authorization error"},
 		"error not object":     {403, "application/json", `{"error":"no"}`, "dalgo access denied"},
-		"invalid decision":     {403, "application/json", `{"authorization":{"allowed":false}}`, "dalgo access denied"},
+		"invalid decision":     {403, "application/json", `{"authorization":{"allowed":false}}`, "invalid authorization error"},
 		"top-level decision":   {403, "application/json", `{"authorization":` + guardedDenial + `}`, "OpenVaultDB access denied"},
 		"error-level decision": {403, "application/json", `{"error":{"code":"access_denied","authorization":` + guardedDenial + `}}`, "OpenVaultDB access denied"},
 	} {
@@ -176,13 +176,13 @@ func TestGuardedQueryResponses(t *testing.T) {
 			}
 			if tc.status == 403 || tc.status == 401 {
 				var denial *AuthorizationError
-				if !errors.Is(err, access.ErrAccessDenied) || errors.As(err, &denial) != strings.Contains(tc.want, "OpenVaultDB") {
+				if errors.Is(err, access.ErrAccessDenied) == strings.Contains(tc.want, "invalid") || errors.As(err, &denial) != strings.Contains(tc.want, "OpenVaultDB access") {
 					t.Fatalf("denial classification err=%v", err)
 				}
 			}
 		})
 	}
-	if _, err := decodeDenial([]byte(`{"authorization":` + strings.Replace(guardedDenial, `"allowed":false`, `"allowed":true`, 1) + `}`)); err == nil {
+	if _, present, err := decodeDenial([]byte(`{"authorization":` + strings.Replace(guardedDenial, `"allowed":false`, `"allowed":true`, 1) + `}`)); err == nil || !present {
 		t.Fatal("allowed decision accepted as a denial")
 	}
 }
@@ -195,6 +195,27 @@ type failingBody struct{}
 
 func (failingBody) Read([]byte) (int, error) { return 0, errors.New("broken secret") }
 func (failingBody) Close() error             { return nil }
+
+func TestGuardedQueryRejectsAbortedStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"records":[{"key":"customers/1","data":{}}`)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler) // how OVDB ends a stream that fails after rows
+	}))
+	defer server.Close()
+	db, _ := NewDB(server.URL, "crm", WithBearerToken("secret"), WithGuardedReads("alice"))
+	if reader, err := db.ExecuteQueryToRecordsReader(aliceCtx(), customersQuery()); err == nil {
+		t.Fatalf("partial rows returned as success: %v", reader)
+	}
+}
+
+func TestGuardedNilHTTPClientUsesDefault(t *testing.T) {
+	db, err := NewDB("https://ovdb.invalid", "crm", WithBearerToken("secret"), WithGuardedReads("alice"), WithHTTPClient(nil))
+	if err != nil || db == nil {
+		t.Fatalf("db=%v err=%v", db, err)
+	}
+}
 
 func TestGuardedTransport(t *testing.T) {
 	redirect := httptest.NewServer(http.RedirectHandler("https://elsewhere.invalid/", http.StatusFound))

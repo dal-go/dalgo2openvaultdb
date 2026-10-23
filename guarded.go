@@ -66,11 +66,17 @@ func newGuardedDB(db *database) (dal.DB, error) {
 	if strings.TrimSpace(*db.guardedPrincipal) == "" {
 		return nil, errors.New("missing OpenVaultDB principal ID")
 	}
+	base := db.c.client
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return dal.NewDB(&guardedDB{
 		id:          db.id,
 		endpoint:    strings.TrimRight(db.c.baseURL, "/") + "/v1/databases/" + url.PathEscape(db.id) + "/tugql",
 		token:       db.c.bearerToken,
-		client:      db.c.client,
+		client:      &client,
 		principalID: *db.guardedPrincipal,
 	}), nil
 }
@@ -80,7 +86,7 @@ type guardedDB struct {
 	id          string
 	endpoint    string
 	token       string
-	client      *http.Client
+	client      *http.Client // never follows redirects
 	principalID string
 }
 
@@ -127,10 +133,17 @@ func (db *guardedDB) ExecuteQueryToRecordsReader(ctx context.Context, q dal.Quer
 		return nil, err
 	}
 	if status == http.StatusForbidden || status == http.StatusUnauthorized {
-		if decision, decodeErr := decodeDenial(body); decodeErr == nil {
+		decision, present, decodeErr := decodeDenial(body)
+		switch {
+		case decodeErr == nil:
 			return nil, &AuthorizationError{Decision: decision}
+		case present:
+			// A decision that is malformed, ambiguous or allowing is a broken
+			// upstream, not an ordinary denial.
+			return nil, errors.New("OpenVaultDB returned an invalid authorization error")
+		default:
+			return nil, access.ErrAccessDenied
 		}
-		return nil, access.ErrAccessDenied
 	}
 	if status != http.StatusOK {
 		return nil, errors.New("OpenVaultDB query unavailable")
@@ -154,9 +167,7 @@ func (db *guardedDB) post(ctx context.Context, doc []byte) (int, []byte, error) 
 	req.Header.Set("Authorization", "Bearer "+db.token)
 	req.Header.Set("Content-Type", "application/yaml")
 	req.Header.Set("Accept", "application/json")
-	client := *db.client
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	res, err := client.Do(req)
+	res, err := db.client.Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, nil, fmt.Errorf("OpenVaultDB request failed: %w", ctxErr)
@@ -180,28 +191,28 @@ func (db *guardedDB) post(ctx context.Context, doc []byte) (int, []byte, error) 
 
 // decodeDenial accepts a denial as {"authorization":…} or
 // {"error":{"authorization":…}}, never both, and never an allowed decision.
-func decodeDenial(body []byte) (az.Result, error) {
+// present reports whether the body carried a decision at all; a non-object
+// "error" carries none.
+func decodeDenial(body []byte) (result az.Result, present bool, err error) {
 	var envelope map[string]json.RawMessage
 	_ = json.Unmarshal(body, &envelope) // post already proved body is an object
 	authData := envelope["authorization"]
 	if detail := envelope["error"]; len(detail) != 0 {
 		if len(authData) != 0 {
-			return az.Result{}, errors.New("ambiguous authorization response")
+			return az.Result{}, true, errors.New("ambiguous authorization response")
 		}
 		var fields map[string]json.RawMessage
-		if json.Unmarshal(detail, &fields) != nil {
-			return az.Result{}, errors.New("invalid error response")
-		}
+		_ = json.Unmarshal(detail, &fields)
 		authData = fields["authorization"]
 	}
 	if len(authData) == 0 {
-		return az.Result{}, errors.New("response omitted authorization result")
+		return az.Result{}, false, errors.New("response omitted authorization result")
 	}
-	result, err := az.DecodeResultCompatible(authData)
+	result, err = az.DecodeResultCompatible(authData)
 	if err != nil || result.Allowed {
-		return az.Result{}, errors.New("invalid authorization result")
+		return az.Result{}, true, errors.New("invalid authorization result")
 	}
-	return result, nil
+	return result, true, nil
 }
 
 // guardedRecords requires every key to be <collection>/<escaped valid ID>.
