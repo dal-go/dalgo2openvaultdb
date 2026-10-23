@@ -164,3 +164,11 @@ their own storage, cache, logging and result-lifetime controls.
    ```
    go test ./...
    ```
+
+## Releases
+
+Every push to `main` that passes CI is tagged automatically by the shared
+`strongo/cicd` workflow's **Bump version** job: the next SemVer comes from the
+conventional commits since the last tag (`feat:` → minor, `fix:` → patch).
+Do not push version tags by hand — the bumper would mint a second version on
+the same commit.
