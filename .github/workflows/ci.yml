@@ -31,3 +31,5 @@ jobs:
     uses: strongo/cicd/.github/workflows/workflow.yml@main
     secrets:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      require_conventional_pr_title: true
