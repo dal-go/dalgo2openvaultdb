@@ -7,7 +7,7 @@ toolchain go1.27.0
 require (
 	github.com/dal-go/dalgo v0.95.3
 	github.com/dal-go/record v0.1.5
-	github.com/openvaultdb/openvaultdb-go v0.26.1
+	github.com/openvaultdb/openvaultdb-go v0.26.3
 )
 
 require (
@@ -26,7 +26,7 @@ require (
 	github.com/dal-go/dalgo2mysql v0.2.2 // indirect
 	github.com/dal-go/dalgo2postgres v0.9.4 // indirect
 	github.com/dal-go/dalgo2sql v0.29.7 // indirect
-	github.com/dal-go/dalgo2sqlite v0.4.5 // indirect
+	github.com/dal-go/dalgo2sqlite v0.4.7 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/georgysavva/scany/v2 v2.1.4 // indirect
