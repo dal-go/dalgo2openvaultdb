@@ -161,6 +161,12 @@ func conditionToWire(cond dal.Condition) ([]wireWhereClause, error) {
 		}
 		return []wireWhereClause{clause}, nil
 
+	case dal.IsNullCondition:
+		// The OpenVaultDB wire filter ops are ==, <, <=, >, >=, in,
+		// array-contains and array-contains-any; none tests for null or
+		// absence, and silently dropping the test would change the result.
+		return nil, fmt.Errorf("%w: %s: the OpenVaultDB wire protocol has no null/exists filter op", dal.ErrNotSupported, c)
+
 	default:
 		return nil, fmt.Errorf("%w: unsupported condition type %T", dal.ErrNotSupported, cond)
 	}

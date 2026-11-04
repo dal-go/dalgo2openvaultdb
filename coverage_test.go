@@ -1129,3 +1129,17 @@ func TestTX_SuccessfulPaths(t *testing.T) {
 		t.Fatalf("expected successful roTx.ExecuteQueryToRecordsReader: %v, %v", err, reader)
 	}
 }
+
+func TestConditionToWireIsNullNotSupported(t *testing.T) {
+	f := dal.NewFieldRef("", "v")
+	for _, cond := range []dal.Condition{
+		dal.NewIsNullCondition(f),
+		dal.NewIsNotNullCondition(f),
+		dal.NewGroupCondition(dal.And, dal.WhereField("a", dal.Equal, 1), dal.NewIsNullCondition(f)),
+	} {
+		_, err := conditionToWire(cond)
+		if !errors.Is(err, dal.ErrNotSupported) || !strings.Contains(err.Error(), "no null/exists filter op") {
+			t.Fatalf("%v: want ErrNotSupported naming the missing wire op, got %v", cond, err)
+		}
+	}
+}
